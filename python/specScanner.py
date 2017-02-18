@@ -11,27 +11,7 @@
 
 import time
 import RFExplorer
-
-#---------------------------------------------------------
-# My Functions
-#---------------------------------------------------------
-
-def FilePiper(objRFE):
-    """This function is meant to pipe the data into a file for plotting it etc.
-    """
-    # Just copied this code
-    nInd = objRFE.SweepData.Count-1
-    objSweepTemp = objRFE.SweepData.GetData(nInd)
-    nStep = objSweepTemp.GetPeakStep()      #Get index of the peak
-    fAmplitudeDBM = objSweepTemp.GetAmplitude_DBM(nStep)    #Get amplitude of the peak
-    fCenterFreq = objSweepTemp.GetFrequencyMHZ(nStep)   #Get frequency of the peak
-
-    # Open file
-    objFile = open("test.csv", "a")
-    # Write some shit
-    objFile.write("{0:.3f}".format(fCenterFreq) + "," + str(fAmplitudeDBM) + "\n");
-	# Close file
-    objFile.close()
+import sys, getopt
 
 #---------------------------------------------------------
 # Helper functions
@@ -48,36 +28,38 @@ def PrintPeak(objRFE):
 
     print("Peak: " + "{0:.3f}".format(fCenterFreq) + "MHz  " + str(fAmplitudeDBM) + "dBm")
 
-def ControlSettings(objRFE):
+def ControlSettings(objRFE,fstart,fstop):
     """This functions check user settings 
     """
     SpanSize = None
     StartFreq = None
     StopFreq =  None
+    
+    span = abs(fstart-fstop)
 
     #print user settings
-    print("User settings:" + "Span: " + str(SPAN_SIZE_MHZ) +"MHz"+  " - " + "Start freq: " + str(START_SCAN_MHZ) +"MHz"+" - " + "Stop freq: " + str(STOP_SCAN_MHZ) + "MHz")
+    print("User settings:" + "Span: " + str(span) +"MHz"+  " - " + "Start freq: " + str(fstart) +"MHz"+" - " + "Stop freq: " + str(fstop) + "MHz")
 
     #Control maximum Span size
-    if(objRFE.MaxSpanMHZ <= SPAN_SIZE_MHZ):
+    if(objRFE.MaxSpanMHZ <= span):
         print("Max Span size: " + str(objRFE.MaxSpanMHZ)+"MHz")
     else:
-        objRFE.SpanMHZ = SPAN_SIZE_MHZ
+        objRFE.SpanMHZ = span
         SpanSize = objRFE.SpanMHZ
     if(SpanSize):
         #Control minimum start frequency
-        if(objRFE.MinFreqMHZ > START_SCAN_MHZ):
+        if(objRFE.MinFreqMHZ > fstart):
             print("Min Start freq: " + str(objRFE.MinFreqMHZ)+"MHz")
         else:
-            objRFE.StartFrequencyMHZ = START_SCAN_MHZ
+            objRFE.StartFrequencyMHZ = fstart
             StartFreq = objRFE.StartFrequencyMHZ    
         if(StartFreq):
             #Control maximum stop frequency
-            if(objRFE.MaxFreqMHZ < STOP_SCAN_MHZ):
+            if(objRFE.MaxFreqMHZ < fstop):
                 print("Max Start freq: " + str(objRFE.MaxFreqMHZ)+"MHz")
             else:
-                if((StartFreq + SpanSize) > STOP_SCAN_MHZ):
-                    print("Max Stop freq (START_SCAN_MHZ + SPAN_SIZE_MHZ): " + str(STOP_SCAN_MHZ) +"MHz")
+                if((StartFreq + SpanSize) > fstop):
+                    print("Max Stop freq (fstart + span): " + str(fstop) +"MHz")
                 else:
                     StopFreq = (StartFreq + SpanSize)
     
@@ -92,82 +74,137 @@ BAUDRATE = 500000
 
 objRFE = RFExplorer.RFECommunicator()     #Initialize object and thread
 objRFE.AutoConfigure = False
-SPAN_SIZE_MHZ = 0.5           #Initialize settings
-START_SCAN_MHZ = 2400
-STOP_SCAN_MHZ = 2500
+MIN_SWEEPS_PER_SPAN = 10
+
+OUTPUT_FILE_NAME = '/home/pi/specScanner/temp.csv'
 
 #---------------------------------------------------------
 # Main processing loop
 #---------------------------------------------------------
+def main(argv):
 
-try:
-    #Find and show valid serial ports
-    objRFE.GetConnectedPorts()
+    # Command line arguments to determine different parameters    
+    try: 
+        opts, args = getopt.getopt(argv,"ha:b:s:")
+    except getopt.GetoptError:
+        print('blaaa')
+        sys.exit(2)
+    for opt, arg in opts:
+        if opt == '-h':
+            print('blaaa')
+            sys.exit()
+        elif opt in ("-a"):
+            fstart = int(arg)
+        elif opt in ("-b"):
+            fstop = int(arg)
+        elif opt in ("-s"):
+            steps = int(arg)
     
-    #Reset IoT board GPIO2 to High Level and GPIO3 to High Level
-    objRFE.ResetIOT_HW(True)
-
-    #Connect to available port
-    if (objRFE.ConnectPort(SERIALPORT, BAUDRATE)): 
-        #Wait for unit to notify reset completed
-        while(objRFE.IsResetEvent):
-            pass
-        #Wait for unit to stabilize
-        time.sleep(3)
-
-        #Request RF Explorer configuration
-        objRFE.SendCommand_RequestConfigData()
-        #Wait to receive configuration and model details
-        while(objRFE.ActiveModel == RFExplorer.RFE_Common.eModel.MODEL_NONE):
-            objRFE.ProcessReceivedString(True)    #Process the received configuration
+    try:
+        #Find and show valid serial ports
+        objRFE.GetConnectedPorts()
         
-        #If object is an analyzer, we can scan for received sweeps
-        if(objRFE.IsAnalyzer()):
-            #Control settings
-            SpanSize, StartFreq, StopFreq = ControlSettings(objRFE)
-            if(SpanSize and StartFreq and StopFreq):
-                #set new frequency range
-                objRFE.UpdateDeviceConfig(StartFreq, StopFreq)
+        #Reset IoT board GPIO2 to High Level and GPIO3 to High Level
+        objRFE.ResetIOT_HW(True)
 
-                LastStartFreq = 0
-                nInd = 0
-                while (StopFreq<=STOP_SCAN_MHZ and StartFreq < StopFreq): 
-                    #Process all received data from device 
-                    while (objRFE.SweepData.Count<1):
-                        objRFE.ProcessReceivedString(True)
+        #Connect to available port
+        if (objRFE.ConnectPort(SERIALPORT, BAUDRATE)): 
+            #Wait for unit to notify reset completed
+            while(objRFE.IsResetEvent):
+                pass
+            #Wait for unit to stabilize
+            time.sleep(3)
 
-                    #Print data if received new sweep and a different start frequency 
-                    if(StartFreq != LastStartFreq):
-                        nInd += 1
-                        print("Freq range["+ str(nInd) + "]: " + str(StartFreq) +" - "+ str(StopFreq) + "MHz" )
-                        PrintPeak(objRFE)
-                        FilePiper(objRFE)
-                        LastFreqStart = StartFreq
+            #Request RF Explorer configuration
+            objRFE.SendCommand_RequestConfigData()
+            #Wait to receive configuration and model details
+            while(objRFE.ActiveModel == RFExplorer.RFE_Common.eModel.MODEL_NONE):
+                objRFE.ProcessReceivedString(True)    #Process the received configuration
+            
+            #If object is an analyzer, we can scan for received sweeps
+            if(objRFE.IsAnalyzer()):
+                #Control settings
+                SpanSize, StartFreq, StopFreq = ControlSettings(objRFE,fstart,fstop)
+                print(SpanSize,StartFreq, StopFreq)
+                
+                objRFE.UseMaxHold = True
+                objRFE.FreqSpectrumSteps = steps
+                print(objRFE.FreqSpectrumSteps)
+                time.sleep(1)
 
+
+                if(SpanSize and StartFreq and StopFreq):
                     #set new frequency range
-                    StartFreq = StopFreq
-                    StopFreq = StartFreq + SpanSize
+                    objRFE.SendCommand_SweepDataPoints(steps-1)
+                    objRFE.UpdateDeviceConfig(StartFreq, StopFreq)
+                    print(objRFE.FreqSpectrumSteps)
+                    #Wait for new configuration to arrive (as it will clean up old sweep data)
+                    objSweep=None
+                    while (objSweep==None or objSweep.StartFrequencyMHZ!=StartFreq):
+                        objRFE.ProcessReceivedString(True)
+                        if (objRFE.SweepData.Count>0):
+                            objSweep=objRFE.SweepData.GetData(objRFE.SweepData.Count-1)
 
-                    #Maximum stop/start frequency control
-                    if (StopFreq > STOP_SCAN_MHZ):
-                        StopFreq = STOP_SCAN_MHZ
-                    if (StartFreq < StopFreq):
-                        objRFE.UpdateDeviceConfig(StartFreq, StopFreq)
+                    F_OUT = open(OUTPUT_FILE_NAME, 'w')
 
-                        #Wait for new configuration to arrive (as it will clean up old sweep data)
-                        objSweep=None
-                        while (objSweep==None or objSweep.StartFrequencyMHZ!=StartFreq):
+                    print(objRFE.FreqSpectrumSteps)
+    #                objRFE.FreqSpectrumSteps = 1024
+    #                objRFE.FreqSpectrumSteps = 512
+                    print(objRFE.FreqSpectrumSteps)
+                    LastStartFreq = 0
+                    nInd = 0
+                    while (StopFreq<=fstop and StartFreq < StopFreq): 
+                        #Process all received data from device 
+                        while (objRFE.SweepData.Count<MIN_SWEEPS_PER_SPAN):
                             objRFE.ProcessReceivedString(True)
-                            if (objRFE.SweepData.Count>0):
-                                objSweep=objRFE.SweepData.GetData(objRFE.SweepData.Count-1)
+
+                        #Print data if received new sweep and a different start frequency 
+                        if(StartFreq != LastStartFreq):
+                            nInd += 1
+                            print("Freq range["+ str(nInd) + "]: " + str(StartFreq) +" - "+ str(StopFreq) + "MHz" )
+                            #PrintPeak(objRFE)
+                            #print(objRFE.SweepData.Dump())
+                            amp = objRFE.SweepData.MaxHoldData.m_arrAmplitude
+                            freq = range(len(amp))
+                            delta = (StopFreq-StartFreq)/objRFE.FreqSpectrumSteps
+                            print(len(freq))
+                            for i, a in enumerate(amp):
+                                F_OUT.write(','.join(map(str, (StartFreq + i*delta, a))))
+                                F_OUT.write('\n')
+                                print(','.join(map(str,(StartFreq + i*delta, a))))
+                            #print(objRFE.FreqSpectrumSteps)
+                            LastFreqStart = StartFreq
+
+                        #set new frequency range
+                        StartFreq = StopFreq
+                        StopFreq = StartFreq + SpanSize
+
+                        #Maximum stop/start frequency control
+                        if (StopFreq > fstop):
+                            StopFreq = fstop
+                        if (StartFreq < StopFreq):
+                            objRFE.UpdateDeviceConfig(StartFreq, StopFreq)
+
+                            #Wait for new configuration to arrive (as it will clean up old sweep data)
+                            objSweep=None
+                            while (objSweep==None or objSweep.StartFrequencyMHZ!=StartFreq):
+                                objRFE.ProcessReceivedString(True)
+                                if (objRFE.SweepData.Count>0):
+                                    objSweep=objRFE.SweepData.GetData(objRFE.SweepData.Count-1)
+                    F_OUT.close()
+                else:
+                    print("Error: settings are wrong.\nPlease, change and try again")
             else:
-                print("Error: settings are wrong.\nPlease, change and try again")
+                print("Error: Device connected is a Signal Generator. \nPlease, connect a Spectrum Analyzer")
         else:
-            print("Error: Device connected is a Signal Generator. \nPlease, connect a Spectrum Analyzer")
-    else:
-        print("Not Connected")
-except Exception as obEx:
-    print("Error: " + str(obEx))
+            print("Not Connected")
+  
+    except Exception as obEx:
+        print("Error: " + str(obEx))
+
+
+if __name__ == "__main__":
+   main(sys.argv[1:])
 
 #---------------------------------------------------------
 # Close object and release resources
@@ -175,3 +212,5 @@ except Exception as obEx:
 
 objRFE.Close()    #Finish the thread and close port
 objRFE = None 
+
+
